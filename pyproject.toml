@@ -1,0 +1,16 @@
+[project]
+name = "fs-gen"
+version = "0.1.0"
+description = "Standalone coding-assessment question generator (generator.md flow — generate only, no execution)"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.40",
+    "openai>=1.50",
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    "structlog>=24.0",
+    "alembic>=1.18.5",
+]
