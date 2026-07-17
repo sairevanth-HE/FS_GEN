@@ -1,4 +1,4 @@
-"""A-04: Test Generator — async run (tests are written, never executed)."""
+"""A-04: Test Generator — writes the suites; A-06 executes and gates them."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ Steps:
         user_message=user_message,
         tools=TEST_GENERATOR_TOOL_DEFS,
         tool_handlers=TEST_GENERATOR_HANDLERS,
-        max_tokens=scaled_max_tokens(16000, difficulty),
+        max_tokens=scaled_max_tokens(24000, difficulty),
     )
 
     # Critic reviews the written suite; if it finds gaps, one revision pass fixes them.
@@ -117,7 +117,7 @@ changed test files into BOTH dirs, and respond with ONLY the same JSON object sh
                 user_message=revise_message,
                 tools=TEST_GENERATOR_TOOL_DEFS,
                 tool_handlers=TEST_GENERATOR_HANDLERS,
-                max_tokens=scaled_max_tokens(16000, difficulty),
+                max_tokens=scaled_max_tokens(24000, difficulty),
             )
             tokens += revise_tokens
 

@@ -38,9 +38,10 @@ implemented in both; only the business-logic bodies are left for the candidate t
 skeleton; and the problem statement describes exactly what the skeleton actually contains — no
 drift between what candidates are told and what they're given.
 
-**No Docker. No test-runner scripts. No execution/validation step.** Nothing is built or run as
-part of generation. Test files are a required *written* deliverable — real, logically correct
-assertions for the difficulty tier — but never generate a `Dockerfile`, `docker-compose.yml`,
+**No Docker. No test-runner scripts.** Agents never build or run anything themselves — a separate
+pipeline stage executes the written suites afterward and requires: every suite passes against the
+solution, and the hidden suite fails against the skeleton. Write tests knowing they WILL be run.
+Never generate a `Dockerfile`, `docker-compose.yml`,
 `run-tests.sh`, or any other script whose purpose is to execute tests or build an image. Never
 write test-report artifacts (`xunittest.xml`, `xunittest-report.xml`, `junit.xml`, `unit.xml`),
 `package-lock.json`, or binary database files (`.db`, `.sqlite`, `db.sqlite3`) — databases are
@@ -71,10 +72,19 @@ values persisting unmodified.
    contract comment then `// Your code goes here` as the entire body; Django views — a docstring
    alone as the entire body. Never a bare empty body with no contract detail.
 
-**Test files are written, not executed.** Every question ships two test files: a small sample
-suite (visible to the candidate) and a full suite (hidden). The sample suite is a strict subset of
-the hidden suite's assertions. Both files must contain real, runnable-looking test code with
-concrete inputs/outputs/status codes — write them as if they will be run.
+**Test suites.** Every question ships two test files: a small sample suite (visible to the
+candidate) and a full suite (hidden). The sample suite is a strict subset of the hidden suite's
+assertions, and every sample test is fully SELF-CONTAINED (creates all data it needs — it must
+pass when run alone and when re-run against a reused database). The pipeline executes both suites:
+they must pass against the solution and the hidden suite must fail against the skeleton, so:
+- Every test must require candidate-written logic. Never a frontend test that only asserts static
+  markup the skeleton already renders ("shows an input and a button") — assert fetched data,
+  request payloads, or post-interaction state instead.
+- Suites clean their own slate at the start (delete/reset the rows or DB they depend on, children
+  before parents under foreign keys) so re-runs and shared databases never cause spurious 409s.
+- Frontend: give interactive elements stable accessible names (aria-label, button text) and select
+  by those; when choosing from a <select> whose options load asynchronously, `await waitFor` for
+  the option's text BEFORE firing the change event.
 
 **Test depth scales with difficulty**: Easy → 10–14 test cases. Medium → 16–24 test cases. Hard →
 24+ test cases. At EVERY difficulty, at least 40% of the hidden suite must be non-happy-path tests
@@ -111,6 +121,17 @@ one (Medium) or two (Hard, on different entities/endpoints — not the same rule
 - **State machine with guarded transitions** — only specific from→to status transitions are legal;
   illegal transitions are rejected with a specific error, not silently applied.
 - **Combined filter + sort + paginate on one endpoint** — not pagination alone.
+- **Reversal/compensation semantics** — an undo operation (refund, cancel, return) that restores
+  counters/stock/capacity and rejects double-reversal with a specific error.
+- **Denormalized counter kept in sync** — a stored count/total on a parent (e.g. enrolled_count,
+  open_tickets) that every child write updates atomically and correctly.
+- **Prerequisite/sequential unlocking** — an item is only actionable once its prerequisite
+  (self-referential FK) is completed; violations rejected with a specific error.
+- **Score/threshold-gated advancement** — an entity advances stage/status only when a computed
+  score or count crosses a defined threshold, with auto-transition on crossing (e.g. auto-close,
+  auto-complete).
+- **Value snapshotting** — a price/name copied onto the child row at write time, so later parent
+  edits don't rewrite history (tests pin that old rows keep the snapshot).
 
 A Hard question is **invalid** if a plain CRUD implementation with no branching logic could pass
 the hidden test suite — every Hard question must have at least one hidden test that a
@@ -540,7 +561,9 @@ non-arrow `function(err) { ... }` callback so `this.lastID` resolves correctly.
 `database.js`'s helpers and sends the JSON response. Catch a `SQLITE_CONSTRAINT` error and
 respond 409 with a specific message rather than a raw 500. Parse every `:id` route param with
 `parseInt(req.params.id, 10)` and respond 400 with a specific message if it isn't a valid
-integer, before querying the database.
+integer, before querying the database. Register collection sub-routes (`/api/things/stats`,
+`/api/things/schedule`) BEFORE `/api/things/:id` so Express doesn't shadow them. Implement
+partial updates with `COALESCE(?, column)` in the UPDATE statement rather than read-modify-write.
 
 **Difficulty tiers.**
 - Easy: 1 table, 3–4 routes, no relationships, required-field + boundary validation (empty
@@ -693,6 +716,25 @@ rejected-overlap error shown inline, or a ranked list from a weighted-scoring en
 non-CRUD aggregate read combining data from 2+ endpoints. For a medium/hard "list with related
 child data" view, nest the related data directly in the response payload (built inside the
 backend view) rather than requiring the frontend to make follow-up requests per row.
+
+**Frontend test mock accounting.** In main.test.js/sample.test.js, `beforeEach` must call
+`jest.resetAllMocks()` and re-establish default resolved values for get/post/put/delete
+(`clearAllMocks` does NOT drop leftover mockResolvedValueOnce queues — they leak across tests).
+Each test queues exactly as many `mockResolvedValueOnce` responses as the component's flow
+actually performs — count the mount fetch AND every re-fetch after a create/update/delete
+(components reload their list even after a FAILED mutation); an exhausted queue silently returns
+the default `{ data: {} }` and empties the rendered list.
+
+**CSS imports live ONLY in `src/index.js`.** Never `import './X.css'` inside `App.js` or any
+component — jest (which runs main.test.js/sample.test.js against the components) cannot parse CSS
+and the whole suite fails to load. Import every stylesheet once in `src/index.js`; webpack still
+bundles them for the running app.
+
+**No orphan endpoints.** Every entity the flow needs must be creatable from the UI — if the
+backend has a POST for it, there is a page (wired into the routes and navbar) with a form for it.
+Give every interactive element a stable accessible name (aria-label on inputs, distinct button
+text) so tests select by them. Components must render an explicit error state when a request
+fails and an explicit empty state ("No X found.") when a list is empty — tests pin both.
 """
 
 _REACT_FLASK_BACKEND = """

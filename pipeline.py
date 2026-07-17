@@ -1,10 +1,12 @@
 """
 FS_GEN Pipeline Orchestrator (async)
-Top-level entry point for the generate-only question pipeline (generator.md flow):
-A-01 Designer → A-02 Skeleton → A-03 Solution → A-04 Tests (written only) →
+Top-level entry point for the question pipeline (generator.md flow):
+A-01 Designer → A-02 Skeleton → A-03 Solution → A-04 Tests →
+A-06 Validator (executes suites: solution must pass, skeleton must fail; fixes until green) →
 A-05 Problem Statement → ledger row in Postgres.
 
-No Docker, no test execution, no validation agent, no self-heal.
+No Docker — suites run locally in cached per-stack envs (see services/test_runner.py).
+If this machine can't execute a stack, validation is skipped with a warning.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ async def _run_stage(question_id: str, result: dict, label: str, coro) -> dict |
 
 async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> dict:
     """Generate one question end to end. Returns the pipeline result dict."""
-    from agents import designer, problem_statement, skeleton_generator, solution_generator, test_generator
+    from agents import designer, problem_statement, skeleton_generator, solution_generator, test_generator, validator
 
     GENERATED_DIR.mkdir(exist_ok=True)
     question_id = svc_q.generate_question_id(stack, difficulty, GENERATED_DIR)
@@ -91,6 +93,16 @@ async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> d
     diff = file_io.diff_file_trees(f"{output_dir}/skeleton", f"{output_dir}/solution")
     if not diff["parity_ok"]:
         await _fail(question_id, result, f"tree mismatch after tests: {diff}")
+        return result
+
+    print("→ A-06 Validator (executing test suites)")
+    if await _run_stage(question_id, result, "A-06 Validator",
+            validator.run(question_id, output_dir, stack, difficulty, design)) is None:
+        return result
+
+    diff = file_io.diff_file_trees(f"{output_dir}/skeleton", f"{output_dir}/solution")
+    if not diff["parity_ok"]:
+        await _fail(question_id, result, f"tree mismatch after validation fixes: {diff}")
         return result
 
     print("→ A-05 Problem Statement")

@@ -47,7 +47,7 @@ Respond with ONLY a JSON object (no prose, no markdown fence) with exactly these
   ],
   "logic_complexity": [
     {
-      "type": "overlap_detection|capacity_assignment|multi_step_atomic|weighted_ranking|state_machine|filter_sort_paginate",
+      "type": "overlap_detection|capacity_assignment|multi_step_atomic|weighted_ranking|state_machine|filter_sort_paginate|reversal_semantics|denormalized_counter|prerequisite_unlock|threshold_advancement|value_snapshotting",
       "description": "precise statement of the rule, including tie-breaks/orderings",
       "applies_to": "entity + endpoint it applies to"
     }

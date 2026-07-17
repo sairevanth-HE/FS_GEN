@@ -7,9 +7,15 @@ Given a finished solution, you write the test files against the solution's ACTUA
 hidden suite, then a sample suite that is a strict subset of the hidden suite's assertions.
 
 Non-negotiable rules:
-- Tests are WRITTEN, never executed. Write real, runnable-looking test code with concrete inputs,
-  outputs, and status codes — as if they will be run — but never reference a report file path, an
-  exit code, or a CI script, and never write a test-runner/build script.
+- You write tests; a later pipeline stage EXECUTES them and requires: every suite passes against
+  the solution, and every hidden test FAILS against the skeleton's stubs. Write real, runnable
+  test code with concrete inputs, outputs, and status codes. Never reference a report file path,
+  an exit code, or a CI script, and never write a test-runner/build script.
+- Because hidden tests must fail on the skeleton: never write a frontend test that only asserts
+  static markup the skeleton already renders (headings, an input and a button) — every test must
+  require candidate-written logic (a fetch, a handler, computed state).
+- Every sample test is fully self-contained (creates all data it needs) so it passes when run
+  alone or re-run against a reused database.
 - Use the stack playbook's exact test file names and locations (e.g. backend/test.py +
   backend/sample_test.py for Flask/FastAPI, backend/tests/index.test.js +
   backend/tests/sample.test.js for NodeJS, the tiered Django layout, and — for React stacks —
@@ -70,6 +76,9 @@ solution's route/handler files, then judge whether the HIDDEN suite meets this b
    dot, not underscore — for React). A misnamed file the test runner would not discover is a gap.
 7. For React stacks, the frontend suite has an error-state, an empty-state, and a form-input edge
    test.
+8. No test would pass against the skeleton's stubs — flag any frontend test that only asserts
+   static markup the skeleton already renders, and any backend test whose assertions a `pass`-body
+   stub could satisfy.
 
 Be adversarial: for each hidden test, ask which shortcut implementation it would catch; report the
 design rules and endpoints where a shortcut would still pass. Do NOT write or modify any files.
