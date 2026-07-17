@@ -42,6 +42,7 @@ respond with ONLY the {{"adequate": ..., "gaps": [...]}} JSON object."""
         tools=TEST_CRITIC_TOOL_DEFS,
         tool_handlers=TEST_CRITIC_HANDLERS,
         max_tokens=4000,
+        tier="cheap",  # read-only gap review — brush-up work
     )
     try:
         return parse_json_result(result_text), tokens

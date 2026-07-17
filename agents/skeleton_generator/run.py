@@ -46,6 +46,8 @@ Steps:
         tools=SKELETON_GENERATOR_TOOL_DEFS,
         tool_handlers=SKELETON_GENERATOR_HANDLERS,
         max_tokens=scaled_max_tokens(32000, difficulty),
+        # smart tier: writes many complete files in one tool loop — mini models
+        # truncate write_files payloads and ship partial trees (see parity failures)
     )
 
     duration = time.monotonic() - start

@@ -69,6 +69,15 @@ def _sh(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None) -> sub
         raise RunnerUnavailable(f"missing runtime: {cmd[0]}") from exc
 
 
+def _timeout_result(name: str) -> SuiteResult:
+    """A hung suite is a fixable failure (server never started, un-mocked network
+    call), not a pipeline crash — report it so the fixer can act on it."""
+    msg = (f"suite TIMED OUT after {SUITE_TIMEOUT}s — the process hung. Typical causes: "
+           "the app server is started and never exits, or a test makes a real network call.")
+    logger.warning("suite_timeout", suite=name, timeout_s=SUITE_TIMEOUT)
+    return SuiteResult(name, False, 0, 0, msg)
+
+
 def _tail(r: subprocess.CompletedProcess) -> str:
     """Head + tail of the run output — parse/import errors print their cause at the TOP."""
     out = r.stdout + "\n" + r.stderr
@@ -87,6 +96,7 @@ def ensure_python_env(requirements: Path, py: str) -> Path:
     if python.exists():
         return python
     env_dir.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("python_env_create", python=py, note="one-time per requirements hash")
     try:
         r = _sh(["uv", "venv", "--python", py, str(env_dir)], cwd=env_dir.parent, timeout=ENV_SETUP_TIMEOUT)
         if r.returncode == 0:
@@ -108,6 +118,7 @@ def ensure_node_modules(package_json: Path) -> Path:
     if node_modules.exists():
         return node_modules
     cache.mkdir(parents=True, exist_ok=True)
+    logger.info("npm_install", note="one-time per package.json hash")
     shutil.copy(package_json, cache / "package.json")
     try:
         r = _sh(["npm", "install", "--prefer-offline", "--no-audit", "--no-fund"],
@@ -170,9 +181,14 @@ def _run_python_backend(kind: str, backend_src: Path, suites: list[str]) -> list
                 fname = "test.py" if suite == "hidden" else "sample_test.py"
                 cmd = [str(python), "-m", "pytest", fname, "-q", "-p", "no:cacheprovider"]
                 name = f"backend/{fname}"
-            r = _sh(cmd, cwd=work, timeout=SUITE_TIMEOUT)
+            try:
+                r = _sh(cmd, cwd=work, timeout=SUITE_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                results.append(_timeout_result(name))
+                continue
             parse = _parse_unittest if kind == "django" else _parse_pytest
             passed, failed = parse(r.stdout + r.stderr)
+            logger.info("suite_result", suite=name, ok=r.returncode == 0, passed=passed, failed=failed)
             results.append(SuiteResult(name, r.returncode == 0, passed, failed, _tail(r)))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -190,10 +206,16 @@ def _run_jest(part_src: Path, part_name: str, files: list[str], extra_args: list
         (work / "node_modules").symlink_to(node_modules)
         jest = str(node_modules / ".bin" / "jest")
         for f in files:
-            r = _sh([jest, f, "--runInBand", "--forceExit", *extra_args],
-                    cwd=work, timeout=SUITE_TIMEOUT, env=env)
+            name = f"{part_name}/{f}"
+            try:
+                r = _sh([jest, f, "--runInBand", "--forceExit", *extra_args],
+                        cwd=work, timeout=SUITE_TIMEOUT, env=env)
+            except subprocess.TimeoutExpired:
+                results.append(_timeout_result(name))
+                continue
             passed, failed = _parse_jest(r.stdout + r.stderr)
-            results.append(SuiteResult(f"{part_name}/{f}", r.returncode == 0, passed, failed, _tail(r)))
+            logger.info("suite_result", suite=name, ok=r.returncode == 0, passed=passed, failed=failed)
+            results.append(SuiteResult(name, r.returncode == 0, passed, failed, _tail(r)))
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
     return results

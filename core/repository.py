@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.orm import AgentLog, Question, QuestionFile, get_session
 
@@ -50,8 +50,12 @@ async def finalize_question(
     entities: list,
     core_business_rule: str,
     problem_statement: str,
+    status: str = "complete",
 ) -> dict:
-    """Record the ledger fields + problem statement and mark the question complete."""
+    """Record the ledger fields + problem statement and mark the question done.
+
+    status is "complete" for a validated question, "unvalidated" when the test
+    suites could not be executed on this machine (recover with --revalidate)."""
     async with get_session() as session:
         result = await session.execute(
             select(Question).where(Question.question_id == question_id)
@@ -62,9 +66,39 @@ async def finalize_question(
             q.entities = entities
             q.core_business_rule = core_business_rule
             q.problem_statement = problem_statement
-            q.status = "complete"
+            q.status = status
             q.updated_at = datetime.utcnow()
-    return {"question_id": question_id, "status": "complete"}
+    return {"question_id": question_id, "status": status}
+
+
+async def get_question(question_id: str) -> dict | None:
+    async with get_session() as session:
+        result = await session.execute(
+            select(Question).where(Question.question_id == question_id)
+        )
+        q = result.scalar_one_or_none()
+        if not q:
+            return None
+        return {
+            "question_id": q.question_id,
+            "tech_stack": q.tech_stack,
+            "difficulty": q.difficulty,
+            "domain": q.domain,
+            "entities": q.entities,
+            "core_business_rule": q.core_business_rule,
+            "status": q.status,
+            "output_dir": q.output_dir,
+        }
+
+
+async def sum_agent_tokens(question_id: str) -> int:
+    """Total tokens spent on this question across every agent call."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(func.coalesce(func.sum(AgentLog.tokens_used), 0))
+            .where(AgentLog.question_id == question_id)
+        )
+        return int(result.scalar_one())
 
 
 async def list_questions(limit: int | None = None) -> list[dict]:

@@ -49,6 +49,7 @@ Steps:
         tools=PROBLEM_STATEMENT_TOOL_DEFS,
         tool_handlers=PROBLEM_STATEMENT_HANDLERS,
         max_tokens=scaled_max_tokens(12000, difficulty),
+        tier="cheap",  # prose write-up of an already-decided design — brush-up work
     )
 
     duration = time.monotonic() - start

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 
@@ -37,6 +38,29 @@ def _failure_report(results: list[test_runner.SuiteResult]) -> str:
     parts = [f"## {r.suite} (exit not ok — {r.passed} passed, {r.failed} failed)\n{r.output}"
              for r in results if not r.ok]
     return "\n\n".join(parts)
+
+
+_STALL_NOTE = ("NOTE: your previous fix changed NOTHING — the exact same failures repeat, so the "
+               "earlier diagnosis was wrong. Do not repeat that patch. Re-read the failing test AND "
+               "the code it hits and look for a different root cause.\n")
+
+_TEST_NAME_RE = re.compile(r"^\s*def (test_\w+)|(?:\bit|\btest)\s*\(\s*['\"](.+?)['\"]", re.M)
+
+
+def _sample_subset_warning(solution_dir: str) -> str | None:
+    """Deterministic backstop for the prompt rule 'sample suite ⊆ hidden suite':
+    every test NAME in a sample file must also exist in a hidden file."""
+    sample: set[str] = set()
+    hidden: set[str] = set()
+    for p in Path(solution_dir).rglob("*"):
+        if p.suffix not in (".py", ".js") or "test" not in p.name.lower():
+            continue
+        names = {a or b for a, b in _TEST_NAME_RE.findall(p.read_text(errors="replace"))}
+        (sample if "sample" in p.name.lower() else hidden).update(names)
+    extras = sample - hidden
+    if extras:
+        return f"sample suite drifted from hidden suite — sample-only tests: {sorted(extras)}"
+    return None
 
 
 async def _fix(question_id: str, output_dir: str, stack: str, difficulty: str,
@@ -79,6 +103,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
                               tokens_used=tokens)
 
     # Gate 1: every suite green on the solution.
+    log.info("gate1_start", target="solution", suites="all")
     try:
         results = await asyncio.to_thread(test_runner.run_part_suites, stack, solution_dir)
     except test_runner.RunnerUnavailable as exc:
@@ -101,12 +126,25 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
             spent += 1
             rounds += 1
             before = _badness(res)
-            log.info("validation_fix_round", round=rounds, results=_summary(res))
-            tokens += await _fix(question_id, output_dir, stack, difficulty, design_json,
-                                 "Fix these REAL test-run failures (Gate 1: solution must pass):",
-                                 _failure_report(res))
+            log.info("validation_fix_round", round=rounds, budget=budget, results=_summary(res))
+            round_start = time.monotonic()
+            round_tokens = await _fix(
+                question_id, output_dir, stack, difficulty, design_json,
+                (_STALL_NOTE if stalled else "")
+                + "Fix these REAL test-run failures (Gate 1: solution must pass):",
+                _failure_report(res))
+            tokens += round_tokens
             res = await asyncio.to_thread(test_runner.run_part_suites, stack, solution_dir)
             stalled = stalled + 1 if _badness(res) >= before else 0
+            # Per-round evidence in the DB so a failed question is debuggable without a rerun.
+            # tokens_used stays in the text only — the final summary row carries the cumulative
+            # count, and double-logging would inflate the per-question token sum.
+            await db.db_log_agent(
+                question_id=question_id, agent_id=AGENT_ID, agent_name=AGENT_NAME,
+                status="fix_round",
+                logs=(f"round {rounds}: badness {before}→{_badness(res)} "
+                      f"(stalled={stalled}, round_tokens={round_tokens}) | {_summary(res)}"),
+                duration_seconds=time.monotonic() - round_start)
         return res
 
     results = await _fix_loop(results, MAX_FIX_ROUNDS)
@@ -117,16 +155,18 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
                 "error": f"tests failing after {rounds} fix rounds: {_summary(results)}"}
 
     # Gate 2: hidden suite must fail on the skeleton (tests require candidate logic).
+    log.info("gate2_start", target="skeleton", suites="hidden", expectation="must fail")
     try:
         skel = await asyncio.to_thread(test_runner.run_part_suites, stack, skeleton_dir, ["hidden"])
     except test_runner.RunnerUnavailable as exc:
+        log.warning("skeleton_check_skipped", reason=str(exc))
         await _log("success", f"solution green ({_summary(results)}); skeleton check skipped: {exc}")
         return {"question_id": question_id, "status": "done", "fix_rounds": rounds,
                 "validation": "solution_only"}
 
     skel_passing = sum(r.passed for r in skel)
     if skel_passing:
-        log.info("skeleton_passing_tests", count=skel_passing)
+        log.info("skeleton_passing_tests", count=skel_passing, action="strengthening")
         tokens += await _fix(
             question_id, output_dir, stack, difficulty, design_json,
             f"Gate 2 violation: {skel_passing} hidden test(s) PASS against the skeleton stubs — "
@@ -149,10 +189,18 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
         return {"question_id": question_id, "status": "failed",
                 "error": "hidden suite passes on the untouched skeleton"}
 
+    # Non-fatal drift guard: the fixer prompt requires sample ⊆ hidden; verify it held.
+    if warn := _sample_subset_warning(solution_dir):
+        log.warning("sample_subset_violation", detail=warn)
+        await db.db_log_agent(question_id=question_id, agent_id=AGENT_ID, agent_name=AGENT_NAME,
+                              status="warning", logs=warn)
+
     logs = (f"solution green: {_summary(results)} | skeleton hidden: "
             f"{sum(r.failed for r in skel)} failing / {skel_passing} passing | fix_rounds={rounds}")
     await _log("success", logs)
-    log.info("validation_done", fix_rounds=rounds, skeleton_passing=skel_passing)
+    log.info("validation_done", symmetry="ok", fix_rounds=rounds,
+             skeleton_failing=sum(r.failed for r in skel), skeleton_passing=skel_passing,
+             tokens=tokens)
     return {"question_id": question_id, "status": "done", "fix_rounds": rounds,
             "solution_suites": [vars(r) | {"output": ""} for r in results],
             "skeleton_passing_hidden": skel_passing}

@@ -27,10 +27,19 @@ async def db_finalize_question(
     entities: list,
     core_business_rule: str,
     problem_statement: str,
+    status: str = "complete",
 ) -> dict:
     return await repository.finalize_question(
-        question_id, domain, entities, core_business_rule, problem_statement
+        question_id, domain, entities, core_business_rule, problem_statement, status
     )
+
+
+async def db_get_question(question_id: str) -> Optional[dict]:
+    return await repository.get_question(question_id)
+
+
+async def db_sum_agent_tokens(question_id: str) -> int:
+    return await repository.sum_agent_tokens(question_id)
 
 
 async def db_list_questions(limit: Optional[int] = None) -> list:

@@ -21,6 +21,9 @@ Non-negotiable rules:
   boundary rejections, FK-missing 404s, conflicts) and every behavior in the design's edge_cases
   list — these are part of the contract the hidden tests will pin, not optional polish.
 - No NotImplementedError, no thrown 'Not implemented', no TODO, no placeholder remains anywhere.
+- NEVER create test files (e.g. tests/test.py, sample_tests/test.py, *.test.js) even though the
+  design's planned_file_tree lists them — a later agent writes those into BOTH trees. Mirror the
+  skeleton's files exactly: if the skeleton doesn't have a file, the solution must not either.
 - For React stacks: implement the axios calls (using BASE_URL from src/Constants.js) and the
   result-handling logic in components; everything already working in the skeleton stays working.
 

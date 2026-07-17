@@ -41,6 +41,12 @@ def _provider() -> tuple[str, str]:
 
 PROVIDER, DEFAULT_MODEL = _provider()
 
+# Tier → model for the active provider. Callers pass tier="cheap"/"smart", never a model ID.
+_TIER_MODELS = {
+    "smart": DEFAULT_MODEL,
+    "cheap": settings.ANTHROPIC_MODEL_CHEAP if PROVIDER == "anthropic" else settings.OPENAI_MODEL_CHEAP,
+}
+
 
 @lru_cache(maxsize=1)
 def _get_anthropic_client():
@@ -272,9 +278,17 @@ async def run_agent(
     tools: list,
     tool_handlers: dict,
     max_tokens: int = 8096,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
+    tier: str = "smart",
 ) -> tuple[str, int]:
-    """Run an LLM agent with tool-use loop. Returns (final_text, total_tokens)."""
+    """Run an LLM agent with tool-use loop. Returns (final_text, total_tokens).
+
+    tier selects the model ("smart" default, "cheap" for brush-up work); an explicit
+    model overrides the tier."""
+    model = model or _TIER_MODELS[tier]
     if PROVIDER == "openai":
-        return await _run_openai(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
-    return await _run_anthropic(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
+        text, tokens = await _run_openai(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
+    else:
+        text, tokens = await _run_anthropic(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
+    logger.info("agent_llm_done", tier=tier, model=model, tokens=tokens)
+    return text, tokens
