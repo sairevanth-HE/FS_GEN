@@ -32,8 +32,10 @@ Coverage checklist — ALL of these are mandatory in the hidden suite:
   empty-list response, recompute-on-update, cross-entity effects of deletes, ...).
 - Per logic_complexity item: a positive test, a negative test, AND a boundary test (e.g. exactly
   adjacent ranges do NOT overlap; an illegal state transition is rejected with the exact error).
-- Test count and mix per the universal rules: Easy 10-14, Medium 16-24, Hard 24+, with at least
-  40% of hidden tests non-happy-path at every difficulty.
+- Test count and mix per the universal rules: exactly 8 hidden tests for Easy, 12 for Medium, 16
+  for Hard; the sample suite is 3-5 of those (a strict subset). At least 40% of hidden tests are
+  non-happy-path at every difficulty, and — because the counts are tight — every test targets
+  distinct logic (no duplicate assertions, no trivial filler).
 - Adversarial standard: for every non-happy-path test you write, you must be able to name the
   shortcut implementation it kills (no validation, no computed field, hardcoded value, ignores the
   rule). A hidden suite that a validation-free plain-CRUD implementation would fully pass is

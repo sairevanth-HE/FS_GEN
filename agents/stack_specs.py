@@ -86,11 +86,13 @@ they must pass against the solution and the hidden suite must fail against the s
   by those; when choosing from a <select> whose options load asynchronously, `await waitFor` for
   the option's text BEFORE firing the change event.
 
-**Test depth scales with difficulty**: Easy → 10–14 test cases. Medium → 16–24 test cases. Hard →
-24+ test cases. At EVERY difficulty, at least 40% of the hidden suite must be non-happy-path tests
-(validation failures with concrete violating payloads, boundary values, negative business-rule
-tests, edge cases from the design) — a naive implementation with no validation and no computed
-fields must fail multiple hidden tests. At Medium/Hard, additionally include at least one test per
+**Hidden-suite size by difficulty**: Easy → exactly 8 hidden test cases. Medium → exactly 12.
+Hard → exactly 16. The sample suite is 3–5 of those tests (a strict subset). Because the counts
+are tight, every test must earn its slot: no two tests may assert the same behavior, and no filler
+trivial happy-path duplicates. At EVERY difficulty, at least 40% of the hidden suite must be
+non-happy-path tests (validation failures with concrete violating payloads, boundary values,
+negative business-rule tests, edge cases from the design) — a naive implementation with no
+validation and no computed fields must fail multiple hidden tests. At Medium/Hard, additionally include at least one test per
 non-obvious business rule or cross-entity constraint — a shortcut implementation that ignores the
 rule must fail it.
 
@@ -178,9 +180,9 @@ natural cross-entity constraint that maps onto the logic-complexity list.
 **React frontend conventions** (all 3 React pairings — copied from the HackerEarth references):
 - Functional components with hooks; files are plain **`.js`** (`App.js`, `index.js`,
   `components/<View>.js`) — never `.jsx` file extensions.
-- Routing with **react-router-dom v5** (`BrowserRouter as Router`, `Switch`,
-  `<Route path=... component={...}/>`, `useHistory`), wrapped as
-  `<Router basename={`/${process.env.REACT_APP_HASH}/`}>`.
+- Routing with **react-router-dom v6** (`BrowserRouter as Router`, `Routes` — NOT `Switch`,
+  `<Route path=... element={<View/>}/>` — NOT `component=`, `useNavigate` — NOT `useHistory`),
+  wrapped as `<Router basename={`/${process.env.REACT_APP_HASH}/`}>`.
 - HTTP with **axios**, called directly inside components. The backend base URL lives ONLY in
   `src/Constants.js`, exactly:
   ```js
@@ -189,10 +191,15 @@ natural cross-entity constraint that maps onto the logic-complexity list.
   ```
   Components `import { BASE_URL } from '../Constants';` — never a literal URL in a component,
   and never a `services/api.js` module.
-- UI with **semantic-ui-react** components. Styles: `src/index.css` + `src/App.css` (plus
-  optional per-component css like `components/Header.css`) — never a single `styles.css`.
-- `src/index.html` is the HtmlWebpackPlugin template (mount point `<div id="root">`);
-  `src/__mocks__/axios.js` provides the jest axios mock.
+- UI with **Bootstrap 5** CSS classes (import `bootstrap/dist/css/bootstrap.min.css` once in
+  `src/index.js`) and **react-icons** for icons — never semantic-ui. Styles: `src/index.css` +
+  `src/App.css` (plus optional per-component css like `components/Header.css`) — never a single
+  `styles.css`.
+- `src/index.html` is the HtmlWebpackPlugin template (mount point `<div id="root">`).
+  `src/index.js` mounts the app the **React 18** way: `import ReactDOM from 'react-dom/client';`
+  then `ReactDOM.createRoot(document.getElementById('root')).render(<App/>);` — never the old
+  `ReactDOM.render`. `src/__mocks__/axios.js` provides the jest axios mock (axios-mock-adapter is
+  also installed for tests that prefer a MockAdapter).
 - Frontend test files live at the frontend root: `main.test.js` (hidden) + `sample.test.js`
   (visible sample).
 - In the skeleton, markup/JSX, navigation, form input handling, and loading-state scaffolding
@@ -290,50 +297,70 @@ backend/
 Do not split into `app.py`/`db.py`/`routes.py`. Do NOT write any `.db` file — SQLite is created at
 runtime. Difficulty scales the number of models and routes inside this one `main.py`.
 
-**Routing style by tier:**
-- Easy and Medium: `flask_restful` — `Resource` subclasses, one class per resource
-  (`class EventList(Resource): def get(self): ...`), registered with `api.add_resource(...)`.
-- **Hard: plain `@app.route(...)` function handlers — NO flask_restful** (matching the reference;
-  Flask_RESTful is also removed from Hard's requirements.txt).
+**Routing style — plain `@app.route(...)` function handlers at EVERY tier** (matching the
+reference: `@app.route('/users/<int:user_id>', methods=['GET'])`, one function per route, using
+`jsonify` and `request`). Do NOT use `flask_restful` `Resource` classes or `api.add_resource(...)`,
+even though `Flask_RESTful` stays pinned in requirements.txt.
 
-**Database.** Flask-SQLAlchemy, `SQLALCHEMY_DATABASE_URI = 'sqlite:///<name>.db'`. Model classes
-fully defined — never stubbed. `db.create_all()` runs inside `with app.app_context():` in the
-`__main__` block, followed by the seed-data inserts (guarded so they only insert into an empty
-table), then `app.run(debug=True, host="0.0.0.0", port=8000)`.
+**Database.** Flask-SQLAlchemy, exactly as the reference:
+```python
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///<name>.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+```
+Model classes fully defined with an explicit `__init__`, never stubbed; use
+`cascade="all, delete-orphan"` on relationships that need cascade delete. Do NOT seed data inside
+`main.py`, and do NOT call `db.create_all()` at import — call it ONLY in the `__main__` block:
+`db.create_all()` then `app.run(debug=True, host='0.0.0.0', port=8000)`. The project dir is
+read-only during tests, but that is never a problem because the test files point the DB at
+in-memory (see Tests) — `main.py`'s file DB is only used by the running dev server.
 
-**requirements.txt — exact pins (Easy/Medium):**
+**Tests — `unittest.TestCase`, in-memory DB (matching the reference).** Both `test.py` and
+`sample_test.py` are `unittest.TestCase` classes (run under pytest). In `setUp`, override the DB to
+in-memory so no file is ever written and every test starts clean:
+```python
+class Test<Name>API(unittest.TestCase):
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+        self.app = app.test_client()
+        db.create_all()
+        # build all rows this suite needs here (self-contained — no reliance on main.py seed)
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+```
+Import from main: `from main import app, db, <Model>, ...`. Each test drives `self.app` and asserts
+on `json.loads(response.data)`. `sample_test.py` is a strict subset of `test.py`.
+
+**requirements.txt — exact pins (every tier, matching the reference; the xunit report is produced
+by `pytest --junitxml`, so no `unittest_xml_reporting`/`xmlrunner`/`Requests`):**
 ```
 Flask==1.1.2
 Flask_RESTful==0.3.8
 Flask_SQLAlchemy==2.4.3
-SQLAlchemy==1.3.18
-Requests==2.32.3
-unittest_xml_reporting==3.0.4
-xmlrunner==1.7.7
+pytest==7.4.3
 Jinja2==2.11.2
 MarkupSafe==1.1.1
-pytest==6.2.5
+SQLAlchemy==1.3.18
 itsdangerous==1.1.0
 Werkzeug==1.0.1
 ```
-**Hard** uses the same list MINUS `Flask_RESTful`, `Requests`, `unittest_xml_reporting`, and
-`xmlrunner`.
 
 **Solution design.** Factor out small reusable helpers used by every handler: a required-field
 validator, a date/number parser, and an error-response formatter — never duplicate this logic per
 method. Catch `sqlalchemy.exc.IntegrityError` around every write and translate a
 unique/foreign-key violation into a 409 with a specific message rather than a raw 500.
 
-**Difficulty tiers.**
-- Easy: 1 model, 1–2 `Resource` classes, ~4–5 methods total (list, create, get-by-id, update,
-  delete), required-field + boundary validation (empty strings, non-positive numbers rejected).
+**Difficulty tiers** (all as plain `@app.route` functions).
+- Easy: 1 model, ~4–5 routes (list, create, get-by-id, update, delete), required-field + boundary
+  validation (empty strings, non-positive numbers rejected).
 - Medium: 3+ models with real relationships (foreign keys, and at least one join/association
-  pattern), 6+ `Resource` classes, at least one computed/aggregated field exposed via a small
-  model helper method reused everywhere it's needed.
+  pattern), 6+ routes, at least one computed/aggregated field exposed via a small model helper
+  method reused everywhere it's needed.
 - Hard: same or fewer models than Medium but deeper validation — foreign-key-existence checks on
-  writes (404 if a referenced parent id doesn't exist), full CRUD completeness on every resource,
-  correctly serialized nested/joined responses (e.g. ISO-8601 dates) — all as plain `@app.route`
-  functions.
+  writes (404 if a referenced parent id doesn't exist), full CRUD completeness on every route,
+  correctly serialized nested/joined responses (e.g. ISO-8601 dates).
 
 **Stub convention.** Contract docstring, then `pass` (or `return None`):
 ```python
@@ -384,7 +411,8 @@ Do NOT write a `db.sqlite3` file — it is created at runtime by migrations.
 
 **requirements.txt — exact pins:**
 - Easy: `Django==3.0.6`, `djangorestframework==3.11.0`, `requests==2.23.0`,
-  `unittest-xml-reporting==3.0.2`, `asgiref==3.2.7`, `pytz==2020.1`, `sqlparse==0.3.1`.
+  `unittest-xml-reporting==3.0.2`, `django-nose==1.4.7`, `asgiref==3.2.7`, `pytz==2020.1`,
+  `sqlparse==0.3.1`.
 - Medium/Hard: `Django==3.2.7`, `django-cors-headers==3.8.0`, `django-nose==1.4.7`,
   `djangorestframework==3.12.4`, `pytz==2021.1`, `sqlparse==0.4.2`, `asgiref==3.4.1`.
 
@@ -392,6 +420,18 @@ Do NOT write a `db.sqlite3` file — it is created at runtime by migrations.
 committed as real files (`migrations/0001_initial.py`) — model field declarations complete, never
 stubbed. Seed the 3–5 demo rows per entity via a data migration (`migrations/0002_seed.py` using
 `RunPython`) — fully implemented, never stubbed. The dev server runs on port 8000.
+
+**Test runner (all tiers — django-nose).** `django-nose` is in the pin list for every tier, so
+`settings.py` must add `'django_nose'` to `INSTALLED_APPS`, set
+`TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'`, and include this block VERBATIM so the xunit
+report is written on every run:
+```python
+NOSE_ARGS = [
+    "--cover-erase",
+    "--with-xunit",
+    "--xunit-file=xunittest-report.xml",
+]
+```
 
 **CORS (Medium/Hard, and any tier paired with React).** `corsheaders` in INSTALLED_APPS,
 `corsheaders.middleware.CorsMiddleware` FIRST in MIDDLEWARE, `CORS_ORIGIN_ALLOW_ALL = True`.
@@ -447,11 +487,43 @@ pytest==7.4.3
 httpx==0.25.1
 ```
 
-**Database.** SQLAlchemy ORM: `sqlite:///./<name>.db`, `connect_args={"check_same_thread": False}`,
-`Base.metadata.create_all(bind=engine)` executed unconditionally at import time, followed by a
-fully-implemented seed block (guarded to only insert into an empty table). A generator-based
-`get_db()` dependency (`yield db` inside try/finally) injected via `Depends(get_db)` into every
+**Database.** SQLAlchemy ORM, exactly as the reference:
+```python
+SQLALCHEMY_DATABASE_URL = "sqlite:///./<name>.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+```
+`Base.metadata.create_all(bind=engine)` runs unconditionally at import time. Do NOT seed data in
+`main.py` — test data is created inside the tests. A generator-based `get_db()` dependency
+(`db = SessionLocal(); yield db` inside try/finally) is injected via `Depends(get_db)` into every
 route. None of this is ever stubbed. `uvicorn.run(app, host="0.0.0.0", port=8000)` in `__main__`.
+The project dir is read-only during tests, but that is never a problem because the test files
+override `get_db` to a separate test DB and manage its schema themselves (see Tests).
+
+**Tests — pytest + TestClient + dependency override (matching the reference).** Both `test.py` and
+`sample_test.py` build a separate test engine, override the dependency, and create/drop the schema
+per test:
+```python
+from fastapi.testclient import TestClient
+from main import app, Base, get_db, <Model>
+engine = create_engine("sqlite:///./test.db", connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def override_get_db():
+    try:
+        db = TestingSessionLocal(); yield db
+    finally:
+        db.close()
+app.dependency_overrides[get_db] = override_get_db
+client = TestClient(app)
+@pytest.fixture(autouse=True)
+def setup_database():
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
+```
+Tests are self-contained (create their own rows via `client.post(...)`). `sample_test.py` is a
+strict subset of `test.py`.
 
 **Pydantic schema convention.** For every entity define: a `*Create` schema (request body, no
 server-assigned fields), a `*Response` schema (`class Config: from_attributes = True`), and a
@@ -495,9 +567,10 @@ backend/
                       routes.js at /api, `module.exports = { app }`, listens on
                       `process.env.port || 8000` — fully implemented; no cors, matching the
                       reference)
-  database.js        (sqlite3 connection on ./<name>.db + CREATE TABLE IF NOT EXISTS for every
-                      entity + seed inserts + promise query helpers — 100% implemented, ZERO
-                      TODOs; infrastructure the candidate never edits)
+  database.js        (sqlite3 connection on a db FILE inside the OS temp dir — os.tmpdir(), a
+                      writable location — NOT the project dir, which is read-only during tests;
+                      CREATE TABLE IF NOT EXISTS for every entity + seed inserts + promise query
+                      helpers — 100% implemented, ZERO TODOs; infrastructure the candidate never edits)
   routes.js          (ONE express.Router() holding ALL endpoint stubs — this is the only file the
                       candidate completes)
   package.json
@@ -551,11 +624,18 @@ order, same name, no additions — do NOT add cors or rename it):**
 }
 ```
 
-**`database.js` responsibility.** `const sqlite3 = require('sqlite3').verbose();` connection on
-`./<name>.db`, `PRAGMA foreign_keys = ON`, `CREATE TABLE IF NOT EXISTS` for every entity, seed
-inserts (guarded to only insert into an empty table), and promise helpers (`runQuery`, `getQuery`,
-`allQuery`) exported for routes.js. When capturing an autoincrement id from an insert, use a
-non-arrow `function(err) { ... }` callback so `this.lastID` resolves correctly.
+**`database.js` responsibility.** `const sqlite3 = require('sqlite3').verbose();` opening a normal
+on-disk sqlite FILE, but in a WRITABLE directory — build the path with
+`const path = require('path'); const os = require('os'); const DB_PATH = path.join(os.tmpdir(), '<name>.db');`
+then `new sqlite3.Database(DB_PATH)`. NEVER open `./<name>.db` in the project dir: that directory is
+mounted READ-ONLY when the tests run, so the first write (the startup seed) fails with
+`SQLITE_READONLY: attempt to write a readonly database`, and the failed seed then cascades into
+`SQLITE_CONSTRAINT: FOREIGN KEY constraint failed` on later inserts. Delete any stale file first
+(`const fs = require('fs'); if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);`) so every run starts
+from a clean, freshly-seeded database. Then `PRAGMA foreign_keys = ON`, `CREATE TABLE IF NOT EXISTS`
+for every entity, seed inserts (guarded to only insert into an empty table), and promise helpers
+(`runQuery`, `getQuery`, `allQuery`) exported for routes.js. When capturing an autoincrement id from
+an insert, use a non-arrow `function(err) { ... }` callback so `this.lastID` resolves correctly.
 
 **Routes responsibility.** Every handler in `routes.js` performs the business logic using
 `database.js`'s helpers and sends the JSON response. Catch a `SQLITE_CONSTRAINT` error and
@@ -614,17 +694,19 @@ field order, no additions, no omissions):**
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@babel/plugin-transform-runtime": "^7.16.4",
-    "@babel/polyfill": "^7.10.1",
-    "@testing-library/jest-dom": "^5.15.0",
-    "@testing-library/react": "^12.1.2",
-    "@testing-library/user-event": "^13.5.0",
-    "axios": "^0.21.1",
-    "enzyme": "^3.11.0",
-    "react": "^16.13.1",
-    "react-dom": "^16.13.1",
-    "react-router-dom": "^5.1.2",
-    "semantic-ui-react": "^0.88.2"
+    "@babel/plugin-transform-runtime": "7.18.10",
+    "@babel/polyfill": "7.10.1",
+    "@testing-library/dom": "7.31.2",
+    "@testing-library/jest-dom": "5.16.3",
+    "@testing-library/react": "12.1.4",
+    "@testing-library/user-event": "13.5.0",
+    "axios": "0.21.1",
+    "axios-mock-adapter": "2.1.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-icons": "4.4.0",
+    "react-router-dom": "6.22.3",
+    "bootstrap": "5.3.3"
   },
   "scripts": {
     "start": "webpack-dev-server --hot --mode development --host 0.0.0.0",
@@ -634,29 +716,29 @@ field order, no additions, no omissions):**
     "main_tests": "jest --testTimeout=10000 --verbose --ci --testResultsProcessor=\\"jest-junit\\" -- main.test.js"
   },
   "devDependencies": {
-    "@babel/core": "^7.10.2",
-    "@babel/plugin-proposal-class-properties": "^7.10.1",
-    "@babel/plugin-proposal-object-rest-spread": "^7.10.1",
-    "@babel/preset-env": "^7.10.2",
-    "@babel/preset-react": "^7.10.1",
-    "babel-loader": "^8.1.0",
-    "css-loader": "^3.5.3",
-    "ejs-loader": "^0.5.0",
-    "eslint-config-airbnb": "^18.1.0",
-    "eslint-config-prettier": "^6.10.1",
-    "eslint-plugin-jsx-a11y": "^6.2.3",
-    "eslint-plugin-prettier": "^3.1.2",
-    "file-loader": "^6.0.0",
-    "html-webpack-plugin": "^4.3.0",
-    "prettier": "^2.0.4",
-    "style-loader": "^1.2.1",
-    "svg-url-loader": "^6.0.0",
-    "url-loader": "^4.1.0",
-    "webpack": "^4.43.0",
-    "webpack-cli": "^3.3.11",
-    "webpack-dev-server": "^3.11.0",
-    "jest": "^26.6.3",
-    "jest-junit": "^12.0.0"
+    "@babel/core": "7.10.2",
+    "@babel/plugin-proposal-class-properties": "7.10.1",
+    "@babel/plugin-proposal-object-rest-spread": "7.10.1",
+    "@babel/preset-env": "7.10.2",
+    "@babel/preset-react": "7.10.1",
+    "babel-loader": "8.1.0",
+    "css-loader": "3.5.3",
+    "ejs-loader": "0.5.0",
+    "eslint-config-airbnb": "18.1.0",
+    "eslint-config-prettier": "6.10.1",
+    "eslint-plugin-jsx-a11y": "6.2.3",
+    "eslint-plugin-prettier": "3.1.2",
+    "file-loader": "6.0.0",
+    "html-webpack-plugin": "4.3.0",
+    "jest": "26.6.3",
+    "jest-junit": "12.0.0",
+    "prettier": "2.0.4",
+    "style-loader": "1.2.1",
+    "svg-url-loader": "6.0.0",
+    "url-loader": "4.1.0",
+    "webpack": "4.43.0",
+    "webpack-cli": "3.3.11",
+    "webpack-dev-server": "3.11.0"
   },
   "jest-junit": {
     "suiteName": "jest tests",
@@ -671,12 +753,83 @@ field order, no additions, no omissions):**
 }
 ```
 
-**webpack.config.js** (reference shape): entry `['@babel/polyfill', `${APP_DIR}/index.js`]`,
-output to `build/` with `publicPath: `/${process.env.REACT_APP_HASH}/``, babel-loader for
-`.js`/`.jsx`, `style-loader`+`css-loader` for css, `url-loader` for images, HtmlWebpackPlugin on
-`src/index.html`, `webpack.DefinePlugin` injecting `process.env.REACT_APP_HASH`, and
-`devServer: { contentBase: BUILD_DIR, compress: true, port: 5000, historyApiFallback: true,
-disableHostCheck: true }`.
+**webpack.config.js — copy this VERBATIM, byte-for-byte:**
+```js
+const path = require('path');
+const webpack = require('webpack');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
+
+const APP_DIR = path.resolve(__dirname, 'src');
+const BUILD_DIR = path.resolve(__dirname, 'build');
+const env = process.env.NODE_ENV || 'development';
+
+module.exports = {
+  entry: ['@babel/polyfill', `${APP_DIR}/index.js`],
+  output: {
+    path: BUILD_DIR,
+    filename: `bundle.js`,
+    publicPath: `/${process.env.REACT_APP_HASH}/`,
+  },
+  mode: env,
+  devtool: env === 'development' ? 'source-map' : null,
+  resolve: {
+    extensions: ['.js', '.jsx'],
+  },
+  module: {
+    rules: [
+      {
+        test: /\\.js$/,
+        loader: 'babel-loader',
+        exclude: '/node_modules/',
+      },
+      {
+        test: /\\.jsx$/,
+        loader: 'babel-loader',
+        exclude: '/node_modules/',
+      },
+      {
+        test: /\\.css$/,
+        use: ['style-loader', 'css-loader'],
+      },
+      {
+        test: /\\.(png|jpe?g|gif)$/,
+        loader: `url-loader?limit=10000&name=img/[name].[ext]`,
+      },
+      {
+        test: /\\.svg$/,
+        use: [
+          {
+            loader: 'svg-url-loader',
+            options: {
+              limit: 10000,
+            },
+          },
+        ],
+      },
+    ],
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      template: `${APP_DIR}/index.html`,
+      filename: 'index.html',
+      inject: 'body',
+    }),
+    new webpack.DefinePlugin({
+      'process.env.REACT_APP_HASH': JSON.stringify(process.env.REACT_APP_HASH),
+    }),
+  ],
+  devServer: {
+    contentBase: BUILD_DIR,
+    compress: true,
+    port: 5000,
+    historyApiFallback: true,
+    disableHostCheck: true,
+  },
+  watchOptions: {
+    ignored: /node_modules/,
+  },
+};
+```
 
 **.babelrc** (verbatim):
 ```json
