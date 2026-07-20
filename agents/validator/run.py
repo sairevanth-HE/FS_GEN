@@ -102,10 +102,18 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
                               status=status, logs=logs, duration_seconds=time.monotonic() - start,
                               tokens_used=tokens)
 
-    # Gate 1: every suite green on the solution.
-    log.info("gate1_start", target="solution", suites="all")
+    def _solution_gate() -> list:
+        """Gate 1 = the test suites PLUS an app-boot smoke test. The boot check catches
+        a crash-on-startup (e.g. a seed FK error) that the suites miss, and it rides the
+        same fix loop so the fixer sees the crash output and repairs it."""
+        res = test_runner.run_part_suites(stack, solution_dir)
+        boot = test_runner.boot_check(stack, solution_dir)
+        return res + [boot] if boot is not None else res
+
+    # Gate 1: every suite green on the solution AND the app boots without crashing.
+    log.info("gate1_start", target="solution", suites="all+boot")
     try:
-        results = await asyncio.to_thread(test_runner.run_part_suites, stack, solution_dir)
+        results = await asyncio.to_thread(_solution_gate)
     except test_runner.RunnerUnavailable as exc:
         log.warning("validation_skipped", reason=str(exc))
         await _log("success", f"validation SKIPPED (runner unavailable): {exc}")
@@ -134,7 +142,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
                 + "Fix these REAL test-run failures (Gate 1: solution must pass):",
                 _failure_report(res))
             tokens += round_tokens
-            res = await asyncio.to_thread(test_runner.run_part_suites, stack, solution_dir)
+            res = await asyncio.to_thread(_solution_gate)
             stalled = stalled + 1 if _badness(res) >= before else 0
             # Per-round evidence in the DB so a failed question is debuggable without a rerun.
             # tokens_used stays in the text only — the final summary row carries the cumulative
@@ -174,7 +182,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
             "dirs) so they require real logic, without breaking the solution run:",
             "\n\n".join(f"## {r.suite} on SKELETON — {r.passed} passed (should be 0)\n{r.output}"
                         for r in skel))
-        results = await asyncio.to_thread(test_runner.run_part_suites, stack, solution_dir)
+        results = await asyncio.to_thread(_solution_gate)
         # Strengthening can break the solution run — repair with a small extra fix budget.
         results = await _fix_loop(results, 2)
         if any(not r.ok for r in results):

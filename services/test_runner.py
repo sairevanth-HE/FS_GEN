@@ -238,3 +238,53 @@ def run_part_suites(stack: str, part_dir: str, suites: list[str] | None = None) 
         files = [{"hidden": "main.test.js", "sample": "sample.test.js"}[s] for s in suites]
         results += _run_jest(part / "frontend", "frontend", files, ["--testTimeout=10000"], env={"CI": "true"})
     return results
+
+
+BOOT_WAIT = 4  # seconds to watch for a startup crash before treating the app as healthy
+
+
+def boot_check(stack: str, part_dir: str) -> SuiteResult | None:
+    """Start the NodeJS app briefly and fail if it crashes on boot.
+
+    The jest suites import the app but a bad startup seed surfaces as an async
+    'error' event AFTER the import, so a FK/seed crash slips past them and only
+    shows up under `npm start`. This actually runs `node index.js`: if the process
+    exits (non-zero) within BOOT_WAIT it crashed; if it is still up, it booted fine.
+    Returns a failing SuiteResult on crash, None if it booted or the check is n/a.
+    Any environment problem (missing runtime, install failure) → None (skip, don't
+    fail the question over infra)."""
+    if _backend_kind(stack) != "nodejs":
+        return None  # Python stacks import the app in their suites, so a boot crash already fails there
+    part = Path(part_dir).resolve()
+    backend = part / "backend" if (part / "backend").exists() else part
+    try:
+        node_modules = ensure_node_modules(backend / "package.json")
+    except RunnerUnavailable:
+        return None
+    run_dir = Path(tempfile.mkdtemp(prefix="fsgen-boot-"))
+    try:
+        work = run_dir / "backend"
+        shutil.copytree(backend, work, ignore=shutil.ignore_patterns("node_modules"))
+        (work / "node_modules").symlink_to(node_modules)
+        proc = subprocess.Popen(
+            ["node", "index.js"], cwd=str(work),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env={**os.environ, "port": "0", "PORT": "0"},  # random port — no bind conflicts
+        )
+        try:
+            out = proc.communicate(timeout=BOOT_WAIT)[0]  # returns only if the process EXITS
+            logger.warning("boot_crash", stack=stack, exit_code=proc.returncode)
+            return SuiteResult("backend/boot", False, 0, 0,
+                               f"app crashed on boot (exit {proc.returncode}):\n{_tail_text(out)}")
+        except subprocess.TimeoutExpired:
+            proc.kill(); proc.communicate()  # still running after BOOT_WAIT => healthy
+            logger.info("boot_ok", stack=stack)
+            return None
+    except FileNotFoundError:
+        return None  # node not installed
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def _tail_text(out: str) -> str:
+    return out if len(out) <= OUTPUT_TAIL else out[-OUTPUT_TAIL:]

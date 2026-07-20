@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -151,13 +152,21 @@ async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> d
             problem_statement.run(question_id, output_dir, stack, difficulty, design)) is None:
         return result
 
+    # Package the skeleton (what the candidate receives) as a zip in the output dir.
+    skeleton_zip = shutil.make_archive(
+        base_name=str(Path(output_dir) / "skeleton"),
+        format="zip", root_dir=output_dir, base_dir="skeleton",
+    )
+    logger.info("skeleton_zipped", question_id=question_id, zip=skeleton_zip)
+
     # Finalize: file manifest + ledger row (replaces generated_questions_log.md).
     manifest = (
         [{"relative_path": f"skeleton/{p}", "part": "skeleton"}
          for p in file_io.list_files(f"{output_dir}/skeleton")]
         + [{"relative_path": f"solution/{p}", "part": "solution"}
            for p in file_io.list_files(f"{output_dir}/solution")]
-        + [{"relative_path": "problem_statement.md", "part": "root"}]
+        + [{"relative_path": "problem_statement.md", "part": "root"},
+           {"relative_path": "skeleton.zip", "part": "root"}]
     )
     await svc_db.db_save_file_manifest(question_id, manifest)
     statement_text = file_io.read_file(f"{output_dir}/problem_statement.md")
@@ -181,12 +190,14 @@ async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> d
     result["status"] = final_status
     result["files_logged"] = len(manifest)
     result["total_tokens"] = total_tokens
+    result["skeleton_zip"] = skeleton_zip
     if not validated:
         logger.warning("shipped_unvalidated", question_id=question_id,
                        reason=val.get("reason", val.get("validation")),
                        recover=f"python pipeline.py --revalidate {question_id}")
     logger.info("pipeline_done", question_id=question_id, status=final_status,
-                output_dir=output_dir, files=len(manifest), total_tokens=total_tokens)
+                output_dir=output_dir, files=len(manifest), total_tokens=total_tokens,
+                skeleton_zip=skeleton_zip)
     return result
 
 

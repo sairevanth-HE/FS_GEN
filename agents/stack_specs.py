@@ -633,9 +633,25 @@ mounted READ-ONLY when the tests run, so the first write (the startup seed) fail
 `SQLITE_CONSTRAINT: FOREIGN KEY constraint failed` on later inserts. Delete any stale file first
 (`const fs = require('fs'); if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);`) so every run starts
 from a clean, freshly-seeded database. Then `PRAGMA foreign_keys = ON`, `CREATE TABLE IF NOT EXISTS`
-for every entity, seed inserts (guarded to only insert into an empty table), and promise helpers
-(`runQuery`, `getQuery`, `allQuery`) exported for routes.js. When capturing an autoincrement id from
-an insert, use a non-arrow `function(err) { ... }` callback so `this.lastID` resolves correctly.
+for every entity, seed inserts, and promise helpers (`runQuery`, `getQuery`, `allQuery`) exported
+for routes.js. When capturing an autoincrement id from an insert, use a non-arrow
+`function(err) { ... }` callback so `this.lastID` resolves correctly.
+
+**Seeding — order matters, or the app crashes on boot.** The DB is deleted and recreated on every
+start (above), so it is ALWAYS empty — do NOT guard seeds with a `SELECT COUNT(*)` check, and NEVER
+issue seed INSERTs from inside a `db.get(...)`/`db.all(...)` callback. `db.serialize()` only orders
+statements issued synchronously inside its callback; an INSERT issued from an async callback runs in
+node-sqlite3's parallel mode where order is NOT guaranteed, so a child-table row (e.g. `loan_items`)
+can hit the engine before its parent (`loans`) is committed → `SQLITE_CONSTRAINT: FOREIGN KEY
+constraint failed`, emitted as an unhandled `'error'` event that crashes the process right after
+"Server running on port 8000". Instead, seed UNCONDITIONALLY, in FK-safe parent→child order, using
+ONE of these two patterns:
+  1. All `db.run(INSERT ...)` calls placed directly (top-level) inside the single `db.serialize(() => {
+     ... })` block, right after the CREATE TABLEs — never nested in another statement's callback.
+  2. An `async function seed()` that `await runQuery(...)` for each INSERT in parent→child order,
+     called once at startup.
+Every seed statement must surface its error (a `function(err){ if (err) throw err; }` callback, or
+`await` + try/catch) rather than a bare `db.run` with no error handling.
 
 **Routes responsibility.** Every handler in `routes.js` performs the business logic using
 `database.js`'s helpers and sends the JSON response. Catch a `SQLITE_CONSTRAINT` error and
