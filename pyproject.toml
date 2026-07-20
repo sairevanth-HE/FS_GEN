@@ -13,4 +13,5 @@ dependencies = [
     "python-dotenv>=1.0",
     "structlog>=24.0",
     "alembic>=1.18.5",
+    "langsmith>=0.10.6",
 ]

@@ -48,16 +48,27 @@ _TIER_MODELS = {
 }
 
 
+def _wrap(client, kind: str):
+    """LangSmith tracing is optional — if it's not installed, return the raw client.
+    Wrapping makes each LLM call a run nested under the current question/stage trace
+    (set in pipeline.py); it's a no-op at runtime unless LANGSMITH_TRACING=true."""
+    try:
+        from langsmith.wrappers import wrap_anthropic, wrap_openai
+    except ImportError:
+        return client
+    return (wrap_anthropic if kind == "anthropic" else wrap_openai)(client)
+
+
 @lru_cache(maxsize=1)
 def _get_anthropic_client():
     import anthropic
-    return anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+    return _wrap(anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY), "anthropic")
 
 
 @lru_cache(maxsize=1)
 def _get_openai_client():
     from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=OPENAI_KEY)
+    return _wrap(AsyncOpenAI(api_key=OPENAI_KEY), "openai")
 
 
 def parse_json_result(text: str) -> dict:

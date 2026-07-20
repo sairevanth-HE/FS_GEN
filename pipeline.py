@@ -31,6 +31,33 @@ from services import question as svc_q
 
 logger = structlog.getLogger(__name__)
 
+# Observability is optional: with LangSmith installed + LANGSMITH_TRACING=true, each
+# question is one root trace and each stage a child, so cost/tokens roll up per question
+# (not per LLM call). Without the dep these become no-ops and never block generation.
+try:
+    from langsmith import get_current_run_tree, trace, traceable
+
+    def _tag_run(*, question_id: str, stack: str, difficulty: str) -> None:
+        """Tag the root question trace so react vs backend stacks are filterable in the UI."""
+        if rt := get_current_run_tree():
+            rt.tags = (rt.tags or []) + [stack, difficulty]
+            rt.metadata["question_id"] = question_id
+except ImportError:
+    from contextlib import contextmanager
+
+    class _NoRun:
+        metadata: dict = {}
+        def end(self, **_): pass
+
+    @contextmanager
+    def trace(*_, **__):
+        yield _NoRun()
+
+    def traceable(*_a, **_k):
+        return lambda f: f
+
+    def _tag_run(**_): pass
+
 
 def _check_parity(skeleton_dir: str, solution_dir: str) -> dict:
     """Diff the trees; first repair any EMPTY orphan files (blank placeholders a
@@ -66,18 +93,21 @@ async def _run_stage(question_id: str, result: dict, label: str, coro) -> dict |
     Prints duration + running token total after each stage and enforces the
     per-question token ceiling (QOS: a runaway fix loop dies here, not on the bill)."""
     t0 = time.monotonic()
-    try:
-        stage_result = await coro
-    except Exception as exc:
-        logger.exception(f"{label}_raised", question_id=question_id)
-        await _fail(question_id, result, f"{label} raised: {exc}")
-        return None
+    with trace(name=label, run_type="chain", metadata={"question_id": question_id}) as rt:
+        try:
+            stage_result = await coro
+        except Exception as exc:
+            logger.exception(f"{label}_raised", question_id=question_id)
+            rt.end(outputs={"status": "raised", "error": str(exc)[:200]})
+            await _fail(question_id, result, f"{label} raised: {exc}")
+            return None
+        total_tokens = await svc_db.db_sum_agent_tokens(question_id)
+        rt.end(outputs={"status": stage_result.get("status"), "tokens_so_far": total_tokens})
     if stage_result.get("status") == "failed":
         await _fail(question_id, result, f"{label} failed: {stage_result.get('error', '')[:500]}")
         return None
     result["stages"][label] = stage_result
 
-    total_tokens = await svc_db.db_sum_agent_tokens(question_id)
     logger.info("stage_done", stage=label, question_id=question_id,
                 duration_s=round(time.monotonic() - t0, 1), tokens_so_far=total_tokens)
     ceiling = settings.MAX_TOKENS_PER_QUESTION
@@ -88,12 +118,14 @@ async def _run_stage(question_id: str, result: dict, label: str, coro) -> dict |
     return stage_result
 
 
+@traceable(run_type="chain", name="question")
 async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> dict:
     """Generate one question end to end. Returns the pipeline result dict."""
     from agents import designer, problem_statement, skeleton_generator, solution_generator, test_generator, validator
 
     GENERATED_DIR.mkdir(exist_ok=True)
     question_id = svc_q.generate_question_id(stack, difficulty, GENERATED_DIR)
+    _tag_run(question_id=question_id, stack=stack, difficulty=difficulty)
     output_dir = str(GENERATED_DIR / question_id)
     result: dict = {"question_id": question_id, "output_dir": output_dir, "stages": {}}
 
@@ -201,6 +233,7 @@ async def run_generation_pipeline(stack: str, difficulty: str, domain: str) -> d
     return result
 
 
+@traceable(run_type="chain", name="revalidation")
 async def run_revalidation_pipeline(question_id: str) -> dict:
     """Re-run A-06 on an existing question without regenerating anything — recovers
     'unvalidated' questions on a machine that can execute the stack."""
