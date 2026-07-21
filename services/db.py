@@ -62,3 +62,16 @@ async def db_log_agent(
 
 async def db_save_file_manifest(question_id: str, files: list) -> dict:
     return await repository.save_file_manifest(question_id, files)
+
+
+async def db_record_stack_lesson(stack: str, lesson: str) -> None:
+    await repository.record_stack_lesson(stack, lesson)
+
+
+async def db_get_stack_lessons_block(stack: str, limit: int = 8) -> str:
+    """Ready-to-append prompt text: past pitfalls for this stack, or "" if none yet."""
+    lessons = await repository.get_stack_lessons(stack, limit)
+    if not lessons:
+        return ""
+    bullets = "\n".join(f"- {lesson}" for lesson in lessons)
+    return f"\n\n## Known pitfalls from past runs on this stack\n{bullets}\n"

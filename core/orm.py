@@ -70,6 +70,26 @@ class AgentLog(Base):
     )
 
 
+class StackLesson(Base):
+    """A pitfall distilled from a validator fix round, keyed by stack so future
+    generations of the same stack see it. hits counts how often the same fix text
+    recurred — the read side ranks by this, so one-off noise stays buried."""
+
+    __tablename__ = "fsgen_stack_lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stack: Mapped[str] = mapped_column(Text, nullable=False)
+    lesson: Mapped[str] = mapped_column(Text, nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    last_seen: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"), default=datetime.utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_fsgen_stack_lessons_stack", "stack"),
+    )
+
+
 class QuestionFile(Base):
     """Manifest row for every generated file (path on disk, not content)."""
 

@@ -7,7 +7,7 @@ from datetime import datetime
 import structlog
 from sqlalchemy import func, select
 
-from core.orm import AgentLog, Question, QuestionFile, get_session
+from core.orm import AgentLog, Question, QuestionFile, StackLesson, get_session
 
 logger = structlog.getLogger(__name__)
 
@@ -144,6 +144,33 @@ async def log_agent(
             tokens_used=tokens_used,
         ))
     return {"question_id": question_id, "agent_id": agent_id, "status": status}
+
+
+async def record_stack_lesson(stack: str, lesson: str) -> None:
+    """Upsert by exact lesson text: a repeat occurrence bumps hits instead of
+    adding a duplicate row, so the read side can rank by recurrence."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(StackLesson).where(StackLesson.stack == stack, StackLesson.lesson == lesson)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.hits += 1
+            row.last_seen = datetime.utcnow()
+        else:
+            session.add(StackLesson(stack=stack, lesson=lesson))
+
+
+async def get_stack_lessons(stack: str, limit: int = 8) -> list[str]:
+    """Top lessons for this stack, most-recurring first."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(StackLesson.lesson)
+            .where(StackLesson.stack == stack)
+            .order_by(StackLesson.hits.desc(), StackLesson.last_seen.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
 
 async def save_file_manifest(question_id: str, files: list[dict]) -> dict:

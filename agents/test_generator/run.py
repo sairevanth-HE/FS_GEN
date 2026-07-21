@@ -59,7 +59,8 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
     skeleton_dir = str(Path(output_dir) / "skeleton")
     solution_dir = str(Path(output_dir) / "solution")
 
-    system_prompt = f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+    system_prompt = (f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+                     f"{await db.db_get_stack_lessons_block(stack)}")
     design_json = json.dumps({k: v for k, v in design.items() if k != "status"}, indent=2)
     user_message = f"""Generate the test suites:
 question_id:  {question_id}

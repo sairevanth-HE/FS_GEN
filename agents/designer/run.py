@@ -30,7 +30,8 @@ async def run(question_id: str, stack: str, difficulty: str, domain: str, ledger
         for q in ledger if q.get("domain")
     ) or "(empty — no questions generated yet)"
 
-    system_prompt = f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+    system_prompt = (f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+                     f"{await db.db_get_stack_lessons_block(stack)}")
     user_message = f"""Design a question:
 stack:      {STACKS[stack]}
 difficulty: {difficulty}

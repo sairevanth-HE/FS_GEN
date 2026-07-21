@@ -23,7 +23,8 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
     log = logger.bind(question_id=question_id, agent=AGENT_ID)
     skeleton_dir = str(Path(output_dir) / "skeleton")
 
-    system_prompt = f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+    system_prompt = (f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+                     f"{await db.db_get_stack_lessons_block(stack)}")
     user_message = f"""Generate the skeleton:
 question_id:  {question_id}
 stack:        {STACKS[stack]}

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import structlog
 
-from agents.base import run_agent, scaled_max_tokens
+from agents.base import parse_json_result, run_agent, scaled_max_tokens
 from agents.stack_specs import STACK_PLAYBOOKS, UNIVERSAL_RULES
 from agents.validator.prompt import AGENT_ID, AGENT_NAME, FIXER_SYSTEM_PROMPT
 from agents.tools import TEST_GENERATOR_HANDLERS, TEST_GENERATOR_TOOL_DEFS
@@ -64,8 +64,9 @@ def _sample_subset_warning(solution_dir: str) -> str | None:
 
 
 async def _fix(question_id: str, output_dir: str, stack: str, difficulty: str,
-               design_json: str, instruction: str, report: str) -> int:
-    system_prompt = f"{FIXER_SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+               design_json: str, instruction: str, report: str) -> tuple[int, str]:
+    system_prompt = (f"{FIXER_SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
+                     f"{await db.db_get_stack_lessons_block(stack)}")
     user_message = f"""{instruction}
 question_id:  {question_id}
 skeleton_dir: {Path(output_dir) / 'skeleton'}
@@ -78,14 +79,19 @@ Actual run output:
 {report}
 
 Respond with ONLY: {{"question_id": "{question_id}", "files_changed": [...], "summary": "..."}}"""
-    _, tokens = await run_agent(
+    result_text, tokens = await run_agent(
         system_prompt=system_prompt,
         user_message=user_message,
         tools=TEST_GENERATOR_TOOL_DEFS,
         tool_handlers=TEST_GENERATOR_HANDLERS,
         max_tokens=FIXER_MAX_TOKENS,
     )
-    return tokens
+    summary = ""
+    try:
+        summary = parse_json_result(result_text).get("summary", "") or ""
+    except json.JSONDecodeError:
+        pass
+    return tokens, summary
 
 
 async def run(question_id: str, output_dir: str, stack: str, difficulty: str, design: dict) -> dict:
@@ -136,14 +142,17 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
             before = _badness(res)
             log.info("validation_fix_round", round=rounds, budget=budget, results=_summary(res))
             round_start = time.monotonic()
-            round_tokens = await _fix(
+            round_tokens, summary = await _fix(
                 question_id, output_dir, stack, difficulty, design_json,
                 (_STALL_NOTE if stalled else "")
                 + "Fix these REAL test-run failures (Gate 1: solution must pass):",
                 _failure_report(res))
             tokens += round_tokens
             res = await asyncio.to_thread(_solution_gate)
-            stalled = stalled + 1 if _badness(res) >= before else 0
+            after = _badness(res)
+            if after < before and summary:
+                await db.db_record_stack_lesson(stack, summary)
+            stalled = stalled + 1 if after >= before else 0
             # Per-round evidence in the DB so a failed question is debuggable without a rerun.
             # tokens_used stays in the text only — the final summary row carries the cumulative
             # count, and double-logging would inflate the per-question token sum.
@@ -175,13 +184,16 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
     skel_passing = sum(r.passed for r in skel)
     if skel_passing:
         log.info("skeleton_passing_tests", count=skel_passing, action="strengthening")
-        tokens += await _fix(
+        strengthen_tokens, strengthen_summary = await _fix(
             question_id, output_dir, stack, difficulty, design_json,
             f"Gate 2 violation: {skel_passing} hidden test(s) PASS against the skeleton stubs — "
             "they test nothing the candidate writes. Strengthen exactly those tests (in BOTH "
             "dirs) so they require real logic, without breaking the solution run:",
             "\n\n".join(f"## {r.suite} on SKELETON — {r.passed} passed (should be 0)\n{r.output}"
                         for r in skel))
+        tokens += strengthen_tokens
+        if strengthen_summary:
+            await db.db_record_stack_lesson(stack, strengthen_summary)
         results = await asyncio.to_thread(_solution_gate)
         # Strengthening can break the solution run — repair with a small extra fix budget.
         results = await _fix_loop(results, 2)
