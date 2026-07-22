@@ -18,16 +18,27 @@ from pathlib import Path
 import structlog
 
 from agents.base import parse_json_result, run_agent, scaled_max_tokens
-from agents.stack_specs import STACK_PLAYBOOKS, UNIVERSAL_RULES
+from agents.stack_specs import REACT_STACKS, STACK_PLAYBOOKS, UNIVERSAL_RULES
 from agents.validator.prompt import AGENT_ID, AGENT_NAME, FIXER_SYSTEM_PROMPT
 from agents.tools import TEST_GENERATOR_HANDLERS, TEST_GENERATOR_TOOL_DEFS
 from services import db, test_runner
 
 logger = structlog.getLogger(__name__)
 
-# Keep fixing while rounds still make progress; stop after 2 stalled rounds or the hard cap.
-MAX_FIX_ROUNDS = 5
-FIXER_MAX_TOKENS = 20000  # flat — a truncated fix is worse than a costly one
+
+def _max_fix_rounds(stack: str) -> int:
+    """React pairings surface multi-front failures (backend + frontend + boot check) in
+    the same run — 5 rounds sized for one coherent backend-only failure isn't enough."""
+    return 7 if stack in REACT_STACKS else 5
+
+
+def _fixer_max_tokens(stack: str, difficulty: str) -> int:
+    """Fixer needs more room on React pairings (multi-front failures: backend +
+    frontend + boot check can all need diagnosis/patching in one round) and on
+    harder difficulties (more entities/endpoints/logic-complexity items to reason
+    about). Flat 20000 was sized for a single backend-only file, not this."""
+    base = 32000 if stack in REACT_STACKS else 20000
+    return scaled_max_tokens(base, difficulty)
 
 
 def _summary(results: list[test_runner.SuiteResult]) -> str:
@@ -72,6 +83,11 @@ question_id:  {question_id}
 skeleton_dir: {Path(output_dir) / 'skeleton'}
 solution_dir: {Path(output_dir) / 'solution'}
 
+If your fix touches a test file (test.py, sample_test.py, *.test.js), apply the identical change
+to the copy in BOTH skeleton_dir and solution_dir — they must stay byte-identical. A fix that
+patches a bug in only one copy (e.g. a session/detached-instance issue in the test itself) leaves
+the other copy broken even though the solution passes.
+
 Design (the contract — decides whether a test or the solution is wrong):
 {design_json}
 
@@ -84,7 +100,7 @@ Respond with ONLY: {{"question_id": "{question_id}", "files_changed": [...], "su
         user_message=user_message,
         tools=TEST_GENERATOR_TOOL_DEFS,
         tool_handlers=TEST_GENERATOR_HANDLERS,
-        max_tokens=FIXER_MAX_TOKENS,
+        max_tokens=_fixer_max_tokens(stack, difficulty),
     )
     summary = ""
     try:
@@ -164,7 +180,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
                 duration_seconds=time.monotonic() - round_start)
         return res
 
-    results = await _fix_loop(results, MAX_FIX_ROUNDS)
+    results = await _fix_loop(results, _max_fix_rounds(stack))
     if any(not r.ok for r in results):
         await _log("failed", f"solution suites still failing after {rounds} fix rounds: {_summary(results)}")
         log.error("validation_failed", results=_summary(results))

@@ -114,6 +114,7 @@ async def _run_anthropic(
     tool_handlers: dict,
     max_tokens: int,
     model: str,
+    max_iterations: int,
 ) -> tuple[str, int]:
     client = _get_anthropic_client()
     messages = [{"role": "user", "content": user_message}]
@@ -127,7 +128,7 @@ async def _run_anthropic(
     if tools:
         cached_tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
 
-    for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
+    for iteration in range(1, max_iterations + 1):
         response = await client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -203,7 +204,10 @@ async def _run_anthropic(
             )
             return "", total_tokens
 
-    return f'{{"error": "aborted: exceeded {MAX_TOOL_ITERATIONS} tool iterations"}}', total_tokens
+    return (
+        f'{{"status": "failed", "error": "aborted: exceeded {max_iterations} tool iterations"}}',
+        total_tokens,
+    )
 
 
 async def _run_openai(
@@ -213,6 +217,7 @@ async def _run_openai(
     tool_handlers: dict,
     max_tokens: int,
     model: str,
+    max_iterations: int,
 ) -> tuple[str, int]:
     client = _get_openai_client()
     openai_tools = _to_openai_tools(tools) if tools else []
@@ -223,7 +228,7 @@ async def _run_openai(
     total_tokens = 0
     retried = False
 
-    for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
+    for iteration in range(1, max_iterations + 1):
         kwargs: dict = dict(model=model, max_completion_tokens=max_tokens, messages=messages)
         if openai_tools:
             kwargs["tools"] = openai_tools
@@ -271,7 +276,10 @@ async def _run_openai(
                 )
             return choice.message.content or "", total_tokens
 
-    return f'{{"error": "aborted: exceeded {MAX_TOOL_ITERATIONS} tool iterations"}}', total_tokens
+    return (
+        f'{{"status": "failed", "error": "aborted: exceeded {max_iterations} tool iterations"}}',
+        total_tokens,
+    )
 
 # ------------------ PUBLIC API ------------------
 
@@ -291,15 +299,20 @@ async def run_agent(
     max_tokens: int = 8096,
     model: str | None = None,
     tier: str = "smart",
+    max_tool_iterations: int | None = None,
 ) -> tuple[str, int]:
     """Run an LLM agent with tool-use loop. Returns (final_text, total_tokens).
 
     tier selects the model ("smart" default, "cheap" for brush-up work); an explicit
-    model overrides the tier."""
+    model overrides the tier. max_tool_iterations overrides the default iteration
+    ceiling for file-heavy stages that need more headroom."""
     model = model or _TIER_MODELS[tier]
+    iterations = max_tool_iterations or MAX_TOOL_ITERATIONS
     if PROVIDER == "openai":
-        text, tokens = await _run_openai(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
+        text, tokens = await _run_openai(
+            system_prompt, user_message, tools, tool_handlers, max_tokens, model, iterations)
     else:
-        text, tokens = await _run_anthropic(system_prompt, user_message, tools, tool_handlers, max_tokens, model)
+        text, tokens = await _run_anthropic(
+            system_prompt, user_message, tools, tool_handlers, max_tokens, model, iterations)
     logger.info("agent_llm_done", tier=tier, model=model, tokens=tokens)
     return text, tokens

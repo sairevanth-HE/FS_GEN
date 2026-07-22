@@ -10,7 +10,7 @@ import structlog
 
 from agents.base import parse_json_result, run_agent, scaled_max_tokens
 from agents.skeleton_generator.prompt import AGENT_ID, AGENT_NAME, SYSTEM_PROMPT
-from agents.stack_specs import STACK_PLAYBOOKS, STACKS, UNIVERSAL_RULES
+from agents.stack_specs import REACT_STACKS, STACK_PLAYBOOKS, STACKS, UNIVERSAL_RULES
 from agents.tools import SKELETON_GENERATOR_HANDLERS, SKELETON_GENERATOR_TOOL_DEFS
 from services import db
 
@@ -22,6 +22,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
     start = time.monotonic()
     log = logger.bind(question_id=question_id, agent=AGENT_ID)
     skeleton_dir = str(Path(output_dir) / "skeleton")
+    max_iters = 100 if stack in REACT_STACKS else 80
 
     system_prompt = (f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
                      f"{await db.db_get_stack_lessons_block(stack)}")
@@ -49,6 +50,7 @@ Steps:
         max_tokens=scaled_max_tokens(32000, difficulty),
         # smart tier: writes many complete files in one tool loop — mini models
         # truncate write_files payloads and ship partial trees (see parity failures)
+        max_tool_iterations=max_iters,
     )
 
     duration = time.monotonic() - start

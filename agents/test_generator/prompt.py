@@ -51,8 +51,9 @@ Coverage checklist — ALL of these are mandatory in the hidden suite:
 - Write the SAME test files into BOTH the skeleton dir and the solution dir (identical content),
   so the two trees stay identical.
 
-Work by calling read_file/list_files on the solution, then write_files into both dirs — one
-write_files call per file or small batch, never every test file in a single call.
+Work by calling read_files (batched; use read_file only for a single file) and list_files on the
+solution, then write_files into both dirs — one write_files call per file or small batch, never
+every test file in a single call.
 Respond with ONLY a JSON object:
 {"question_id": "...", "hidden_tests": <count>, "sample_tests": <count>,
  "non_happy_tests": <count of hidden tests that are not happy-path>, "test_files": ["..."]}
@@ -62,7 +63,8 @@ CRITIC_SYSTEM_PROMPT = """You are the Test Critic for a coding-assessment questi
 
 You are given a question's design (API contract with error contracts, edge_cases,
 logic_complexity) and the paths of its solution and test files. Read the test files and the
-solution's route/handler files, then judge whether the HIDDEN suite meets this bar:
+solution's route/handler files (prefer read_files for multiple paths at once over read_file), then
+judge whether the HIDDEN suite meets this bar:
 
 1. Every endpoint has a happy-path test and at least one failure test (exact status + error body).
 2. Every error contract in the design has a test with a concrete violating payload, including

@@ -9,7 +9,7 @@ from pathlib import Path
 import structlog
 
 from agents.base import parse_json_result, run_agent, scaled_max_tokens
-from agents.stack_specs import STACK_PLAYBOOKS, STACKS, UNIVERSAL_RULES
+from agents.stack_specs import REACT_STACKS, STACK_PLAYBOOKS, STACKS, UNIVERSAL_RULES
 from agents.test_generator.prompt import AGENT_ID, AGENT_NAME, CRITIC_SYSTEM_PROMPT, SYSTEM_PROMPT
 from agents.tools import (
     TEST_CRITIC_HANDLERS,
@@ -22,7 +22,7 @@ from services import db
 logger = structlog.getLogger(__name__)
 
 
-async def _critique(design_json: str, skeleton_dir: str, solution_dir: str,
+async def _critique(question_id: str, design_json: str, skeleton_dir: str, solution_dir: str,
                     test_files: list, difficulty: str) -> tuple[dict, int]:
     """Run the read-only critic over the written suites. Returns (verdict, tokens)."""
     user_message = f"""Judge the hidden test suite:
@@ -49,6 +49,10 @@ respond with ONLY the {{"adequate": ..., "gaps": [...]}} JSON object."""
     except json.JSONDecodeError:
         # ponytail: an unparseable critic verdict never fails the pipeline — treat as adequate.
         logger.warning("critic_parse_error", result_text=result_text[:300])
+        await db.db_log_agent(
+            question_id=question_id, agent_id=AGENT_ID, agent_name=AGENT_NAME,
+            status="warning", logs=f"critic verdict unparseable, defaulting to adequate=True: {result_text[:300]}",
+        )
         return {"adequate": True, "gaps": []}, tokens
 
 
@@ -58,6 +62,7 @@ async def run(question_id: str, output_dir: str, stack: str, difficulty: str, de
     log = logger.bind(question_id=question_id, agent=AGENT_ID)
     skeleton_dir = str(Path(output_dir) / "skeleton")
     solution_dir = str(Path(output_dir) / "solution")
+    max_iters = 100 if stack in REACT_STACKS else 80
 
     system_prompt = (f"{SYSTEM_PROMPT}\n{UNIVERSAL_RULES}\n{STACK_PLAYBOOKS[stack]}"
                      f"{await db.db_get_stack_lessons_block(stack)}")
@@ -87,6 +92,7 @@ Steps:
         tools=TEST_GENERATOR_TOOL_DEFS,
         tool_handlers=TEST_GENERATOR_HANDLERS,
         max_tokens=scaled_max_tokens(24000, difficulty),
+        max_tool_iterations=max_iters,
     )
 
     # Critic reviews the written suite; if it finds gaps, one revision pass fixes them.
@@ -98,7 +104,7 @@ Steps:
         first = None
     if first is not None:
         verdict, critic_tokens = await _critique(
-            design_json, skeleton_dir, solution_dir, first.get("test_files", []), difficulty)
+            question_id, design_json, skeleton_dir, solution_dir, first.get("test_files", []), difficulty)
         tokens += critic_tokens
         gaps = verdict.get("gaps") or []
         critic_note = f"critic_gaps={len(gaps)}"
@@ -120,6 +126,7 @@ changed test files into BOTH dirs, and respond with ONLY the same JSON object sh
                 tools=TEST_GENERATOR_TOOL_DEFS,
                 tool_handlers=TEST_GENERATOR_HANDLERS,
                 max_tokens=scaled_max_tokens(24000, difficulty),
+                max_tool_iterations=max_iters,
             )
             tokens += revise_tokens
 

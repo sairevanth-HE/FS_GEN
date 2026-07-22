@@ -20,6 +20,19 @@ def read_file(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def read_files(paths: list) -> dict:
+    """Read multiple files at once. Returns {path: content}. Missing files get an
+    '<error: ...>' placeholder rather than raising, so one bad path doesn't lose the
+    whole batch."""
+    out = {}
+    for p in paths:
+        try:
+            out[p] = Path(p).read_text(encoding="utf-8")
+        except OSError as exc:
+            out[p] = f"<error reading {p}: {exc}>"
+    return out
+
+
 def list_files(directory: str) -> list:
     """Return sorted list of relative file paths under directory (recursive)."""
     base = Path(directory)

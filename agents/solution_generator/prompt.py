@@ -27,7 +27,8 @@ Non-negotiable rules:
 - For React stacks: implement the axios calls (using BASE_URL from src/Constants.js) and the
   result-handling logic in components; everything already working in the skeleton stays working.
 
-Work by calling read_file/list_files on the skeleton, then write_files into the solution dir.
+Work by calling read_files (batched; use read_file only for a single file) and list_files on the
+skeleton, then write_files into the solution dir.
 Write files in SMALL BATCHES — at most 2-3 files per write_files call, one call per batch — never
 all files in a single call; a single huge call gets truncated.
 Use diff_file_trees(skeleton_dir, solution_dir) to verify parity before finishing.

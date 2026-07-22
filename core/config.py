@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # NOTE: the per-agent counter sums input+output+cache tokens on EVERY tool-loop
     # iteration, so a normal question reads as 600k+ — set a ceiling accordingly
     # (e.g. 2_000_000) if you ever need a runaway guard.
-    MAX_TOKENS_PER_QUESTION: int = 0
+    MAX_TOKENS_PER_QUESTION: int = 2_000_000
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="allow"

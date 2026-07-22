@@ -487,6 +487,12 @@ pytest==7.4.3
 httpx==0.25.1
 ```
 
+**Runtime is Python 3.8 — CRITICAL.** The grader runs 3.8, so 3.9+ syntax crashes at import.
+- Type hints: ALWAYS `from typing import List, Optional, Dict` and write `List[XResponse]`,
+  `Optional[int]`, `Dict[str, int]`. NEVER the PEP 585 builtins `list[...]`/`dict[...]`/`tuple[...]`
+  and NEVER `X | None` / `X | Y` unions — both are 3.9/3.10-only and fail on 3.8.
+- A list route's response is `response_model=List[XResponse]`, not `response_model=list[XResponse]`.
+
 **Database.** SQLAlchemy ORM, exactly as the reference:
 ```python
 SQLALCHEMY_DATABASE_URL = "sqlite:///./<name>.db"
@@ -526,7 +532,8 @@ Tests are self-contained (create their own rows via `client.post(...)`). `sample
 strict subset of `test.py`.
 
 **Pydantic schema convention.** For every entity define: a `*Create` schema (request body, no
-server-assigned fields), a `*Response` schema (`class Config: from_attributes = True`), and a
+server-assigned fields), a `*Response` schema (Pydantic v2: `model_config = ConfigDict(from_attributes=True)`
+via `from pydantic import ConfigDict` — NOT the deprecated `class Config`), and a
 `*Update` schema when partial updates are supported. Rely on FastAPI's automatic 422 response for
 malformed/missing fields — state this explicitly in the problem statement.
 
@@ -868,7 +875,8 @@ export default {
 };
 ```
 
-**Frontend stub convention** (only axios calls + their downstream logic are stubbed):
+**Frontend stub convention** (only the axios call INSIDE the helper is stubbed — everything that
+calls the helper and renders its result is fully-wired infrastructure in BOTH trees):
 ```js
 const getCourses = async () => {
   /*
@@ -877,6 +885,28 @@ const getCourses = async () => {
   */
 };
 ```
+**The wiring around the stub is NEVER stubbed — it is present and identical in skeleton AND solution.**
+The ONLY difference between the two trees is the commented-out body of the helper. A component MUST
+already: (1) call the fetch helper from `useEffect(() => { load(); }, [])` on mount, (2) `setState`
+with what the helper returns, (3) render that state (`items.map(...)`), and (4) wire every form's
+`onSubmit` to call the post/put helper with the payload, then re-fetch. Concretely:
+```js
+function Courses() {
+  const [courses, setCourses] = useState([]);      // wired
+  const [error, setError] = useState('');          // wired
+  const load = async () => {                        // wired — calls the stubbed helper
+    try { setCourses(await getCourses()); } catch (e) { setError('Failed to load'); }
+  };
+  useEffect(() => { load(); }, []);                 // wired — fetch on mount
+  const onSubmit = async (e) => {                   // wired — POST then refetch
+    e.preventDefault();
+    try { await createCourse(payload); load(); } catch (e) { setError('Failed to create'); }
+  };
+  return (/* wired JSX: form + courses.map(c => <li>{c.name}</li>) + error/empty states */);
+}
+```
+A generated component whose solution never calls `axios.get`/`axios.post`, or fetches but never
+`setState`s/renders, is BROKEN — the mandatory tests below must fail such a component.
 
 **Frontend difficulty tiers:** Easy = 3–4 simple pages with no route parameters; Medium = 6–7
 components with parameterized routes and at least one derived/aggregate view; Hard = a view that
@@ -898,6 +928,17 @@ the default `{ data: {} }` and empties the rendered list.
 component — jest (which runs main.test.js/sample.test.js against the components) cannot parse CSS
 and the whole suite fails to load. Import every stylesheet once in `src/index.js`; webpack still
 bundles them for the running app.
+
+**Mandatory wiring assertions (make the axios wiring provable — a non-wired solution MUST fail).**
+Static "renders an input and a button" tests are banned (they pass on a dead component). Instead,
+for every view the hidden suite MUST include:
+- **List/read view:** queue a `mockResolvedValueOnce` with a known item, then assert BOTH
+  `expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/<path>'))` AND that the item's
+  field text renders (`await screen.findByText('<known value>')`). This fails a component that
+  never calls GET (#4) or never renders the fetched data (#6).
+- **Create view:** fill the form, submit, then assert `expect(axios.post).toHaveBeenCalledWith(...,
+  <expected payload>)` AND that the new item appears after the refetch. This fails a component
+  whose submit never calls POST (#5).
 
 **No orphan endpoints.** Every entity the flow needs must be creatable from the UI — if the
 backend has a POST for it, there is a page (wired into the routes and navbar) with a form for it.

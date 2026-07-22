@@ -27,6 +27,18 @@ SCHEMA_READ_FILE = {
     },
 }
 
+SCHEMA_READ_FILES = {
+    "name": "read_files",
+    "description": "Read multiple files from disk in one call. Prefer this over read_file when you need more than one file — it saves tool-loop iterations.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "paths": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["paths"],
+    },
+}
+
 SCHEMA_WRITE_FILES = {
     "name": "write_files",
     "description": "Write multiple files to disk. `files` maps relative path → full file content.",
@@ -63,9 +75,12 @@ SCHEMA_DIFF_FILE_TREES = {
     },
 }
 
-_FILE_TOOL_DEFS = [SCHEMA_READ_FILE, SCHEMA_WRITE_FILES, SCHEMA_LIST_FILES, SCHEMA_DIFF_FILE_TREES]
+_FILE_TOOL_DEFS = [
+    SCHEMA_READ_FILE, SCHEMA_READ_FILES, SCHEMA_WRITE_FILES, SCHEMA_LIST_FILES, SCHEMA_DIFF_FILE_TREES,
+]
 _FILE_HANDLERS = {
     "read_file": file_io.read_file,
+    "read_files": file_io.read_files,
     "write_files": file_io.write_files,
     "list_files": file_io.list_files,
     "diff_file_trees": file_io.diff_file_trees,
@@ -87,9 +102,10 @@ TEST_GENERATOR_TOOL_DEFS = _FILE_TOOL_DEFS
 TEST_GENERATOR_HANDLERS = _FILE_HANDLERS
 
 # A-04b Test Critic reviews, never writes.
-TEST_CRITIC_TOOL_DEFS = [SCHEMA_READ_FILE, SCHEMA_LIST_FILES, SCHEMA_DIFF_FILE_TREES]
+TEST_CRITIC_TOOL_DEFS = [SCHEMA_READ_FILE, SCHEMA_READ_FILES, SCHEMA_LIST_FILES, SCHEMA_DIFF_FILE_TREES]
 TEST_CRITIC_HANDLERS = {
     "read_file": file_io.read_file,
+    "read_files": file_io.read_files,
     "list_files": file_io.list_files,
     "diff_file_trees": file_io.diff_file_trees,
 }
